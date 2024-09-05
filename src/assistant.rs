@@ -1,8 +1,7 @@
 use std::future::Future;
 
+use anyhow::Error;
 use serde_json::Value;
-
-use super::error::Error;
 
 #[derive(Clone)]
 pub enum Message {
