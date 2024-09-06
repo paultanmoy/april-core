@@ -5,8 +5,8 @@ use serde_json::Value;
 
 #[derive(Clone)]
 pub enum Message {
-    Info { text: String },
-    Query { ask: String },
+    Text { text: String },
+    Image { image: Vec<u8> },
 }
 
 pub trait Assistant {
