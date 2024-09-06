@@ -1,9 +1,11 @@
 use std::future::Future;
 
 use anyhow::Error;
+use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(tag = "type")]
 pub enum Message {
     Text { text: String },
     Image { image: Vec<u8> },
