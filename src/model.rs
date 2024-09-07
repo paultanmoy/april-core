@@ -2,8 +2,10 @@ use std::future::Future;
 
 use anyhow::Error;
 
-pub trait LargeLanguageModel {
-    fn inference(&self, prompt: &str) -> impl Future<Output = Result<&str, Error>>;
+use super::{Image, Message};
+
+pub trait LanguageModel {
+    fn inference(&self, prompt: &str, image: Option<Image>) -> impl Future<Output = Result<Message, Error>>;
 }
 
 pub mod anthropic;
