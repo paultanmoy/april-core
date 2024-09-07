@@ -11,6 +11,14 @@ impl Image {
     pub fn new(media_type: impl Into<String>, data: Vec<u8>) -> Self {
         Self { media_type: media_type.into(), data }
     }
+
+    pub fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    pub fn data(&self) -> Vec<u8> {
+        self.data.clone()
+    }
 }
 
 #[derive(Clone, Serialize)]
