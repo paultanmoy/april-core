@@ -24,11 +24,14 @@ impl Image {
 #[derive(Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum Message {
+    #[serde(rename = "text")]
     Text { text: String },
+
+    #[serde(rename = "image")]
     Image(Image),
 }
 
 mod assistant;
-pub use assistant::Assistant;
+pub use assistant::{Assistant, AssistantResponse};
 
 pub mod model;
