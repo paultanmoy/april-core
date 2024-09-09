@@ -1,7 +1,14 @@
+use std::fmt;
+
 use anyhow::{anyhow, Result};
 use base64::prelude::{BASE64_STANDARD, Engine as _};
 use reqwest::{Client, StatusCode};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, Visitor},
+    Deserialize,
+    Deserializer,
+    Serialize,
+};
 use tracing::{debug, error, info, instrument, warn};
 
 use super::{Image, LanguageModel, Message};
@@ -152,11 +159,12 @@ struct AnthropicMessage {
 
 #[derive(Serialize)]
 struct AnthropicRequest {
-    #[serde(rename = "anthropic-version", skip_serializing_if = "Option::is_none")]
-    api_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anthropic_version: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
+
     max_tokens: usize,
     messages: Vec<AnthropicMessage>,
     
@@ -169,7 +177,8 @@ struct AnthropicRequest {
     temperature: f32,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
+#[serde(untagged)]
 pub enum AnthropicModel {
     Anthropic {
         api_key: String,
@@ -178,18 +187,194 @@ pub enum AnthropicModel {
         max_tokens: usize,
         temperature: f32,
         stop_sequences: Vec<String>,
+        
+        #[serde(skip_serializing_if = "Option::is_none")]
         system: Option<String>,
+
+        #[serde(skip)]
+        client: Client,
     },
+    
+    #[cfg(feature = "aws-bedrock")]
     Bedrock {
-        aws_access_key: String,
-        aws_secret_key: String,
-        aws_region: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        aws_access_key: Option<String>,
+        
+        #[serde(skip_serializing_if = "Option::is_none")]
+        aws_secret_key: Option<String>,
+        
+        #[serde(skip_serializing_if = "Option::is_none")]
+        aws_region: Option<String>,
+
         api_version: String,
         model: String,
         max_tokens: usize,
         temperature: f32,
         stop_sequences: Vec<String>,
+        
+        #[serde(skip_serializing_if = "Option::is_none")]
         system: Option<String>,
+
+        #[serde(skip_serializing)]
+        client: aws_sdk_bedrockruntime::Client,
+    },
+}
+
+impl<'de> Deserialize<'de> for AnthropicModel {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &["api_key", "api_version", "model", "max_tokens", "temperature", "stop_sequences", "system"];
+        
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field { ApiKey, AwsAccessKey, AwsSecretKey, AwsRegion, ApiVersion, Model, MaxTokens, Temperature, StopSequences, System }
+
+        struct AnthropicModelVisitor;
+
+        impl<'de> Visitor<'de> for AnthropicModelVisitor {
+            type Value = AnthropicModel;
+            
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("enum AnthropicModel")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::MapAccess<'de>,
+            {
+                let mut api_version = None;
+                let mut model = None;
+                let mut max_tokens = None;
+                let mut temperature = None;
+                let mut stop_sequences = None;
+                let mut system = None;
+
+                let mut api_key = None;
+
+                let mut aws_access_key = None;
+                let mut aws_secret_key = None;
+                let mut aws_region = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::ApiKey => {
+                            if aws_access_key.is_some() || aws_secret_key.is_some() || aws_region.is_some() {
+                                return Err(de::Error::custom("either `api_key` or any of `aws_access_key`, `aws_secret_key`, `aws_region` should be present"));
+                            } else if api_key.is_some() {
+                                return Err(de::Error::duplicate_field("api_key"));
+                            }
+                            api_key = Some(map.next_value()?);
+                        },
+                        Field::AwsAccessKey => {
+                            if !cfg!(feature = "aws-bedrock") {
+                                return Err(de::Error::unknown_field("aws_access_key", FIELDS));
+                            } else if api_key.is_some() {
+                                return Err(de::Error::custom("either `api_key` or any of `aws_access_key`, `aws_secret_key`, `aws_region` should be present"));
+                            } else if aws_access_key.is_some() {
+                                return Err(de::Error::duplicate_field("aws_access_key"));
+                            }
+                            aws_access_key = Some(map.next_value()?);
+                        },
+                        Field::AwsSecretKey => {
+                            if !cfg!(feature = "aws-bedrock") {
+                                return Err(de::Error::unknown_field("aws_secret_key", FIELDS));
+                            } else if api_key.is_some() {
+                                return Err(de::Error::custom("either `api_key` or any of `aws_access_key`, `aws_secret_key`, `aws_region` should be present"));
+                            } else if aws_secret_key.is_some() {
+                                return Err(de::Error::duplicate_field("aws_secret_key"));
+                            }
+                            aws_secret_key = Some(map.next_value()?);
+                        },
+                        Field::AwsRegion => {
+                            if !cfg!(feature = "aws-bedrock") {
+                                return Err(de::Error::unknown_field("aws_region", FIELDS));
+                            } else if api_key.is_some() {
+                                return Err(de::Error::custom("either `api_key` or any of `aws_access_key`, `aws_secret_key`, `aws_region` should be present"));
+                            } else if aws_region.is_some() {
+                                return Err(de::Error::duplicate_field("aws_region"));
+                            }
+                            aws_region = Some(map.next_value()?);
+                        },
+                        Field::ApiVersion => {
+                            if api_version.is_some() {
+                                return Err(de::Error::duplicate_field("api_version"));
+                            }
+                            api_version = Some(map.next_value()?);
+                        }
+                        Field::Model => {
+                            if model.is_some() {
+                                return Err(de::Error::duplicate_field("model"));
+                            }
+                            model = Some(map.next_value()?);
+                        },
+                        Field::MaxTokens => {
+                            if max_tokens.is_some() {
+                                return Err(de::Error::duplicate_field("max_tokens"));
+                            }
+                            max_tokens = Some(map.next_value()?);
+                        },
+                        Field::Temperature => {
+                            if temperature.is_some() {
+                                return Err(de::Error::duplicate_field("temperature"));
+                            }
+                            temperature = Some(map.next_value()?);
+                        },
+                        Field::StopSequences => {
+                            if stop_sequences.is_some() {
+                                return Err(de::Error::duplicate_field("stop_sequences"));
+                            }
+                            stop_sequences = Some(map.next_value()?);
+                        },
+                        Field::System => {
+                            if system.is_some() {
+                                return Err(de::Error::duplicate_field("system"));
+                            }
+                            system = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                if let Some(api_key) = api_key {
+                    Ok(AnthropicModel::Anthropic {
+                        api_key,
+                        api_version: api_version.ok_or_else(|| de::Error::missing_field("api_version"))?,
+                        model: model.ok_or_else(|| de::Error::missing_field("model"))?,
+                        max_tokens: max_tokens.unwrap_or_else(|| 1024),
+                        temperature: temperature.unwrap_or_else(|| 0.63),
+                        stop_sequences: stop_sequences.unwrap_or_else(|| vec![]),
+                        system,
+                        client: Client::new(),
+                    })
+                } else {
+                    #[cfg(feature = "aws-bedrock")]
+                    {
+                        let client = tokio::runtime::Runtime::new()
+                            .map_err(|err| de::Error::custom(format!("{}", err)))?
+                            .block_on(super::bedrock::bedrock_client(aws_access_key.clone(), aws_secret_key.clone(), aws_region.clone()));
+
+                        Ok(AnthropicModel::Bedrock {
+                            aws_access_key,
+                            aws_secret_key,
+                            aws_region,
+                            api_version: api_version.ok_or_else(|| de::Error::missing_field("api_version"))?,
+                            model: model.ok_or_else(|| de::Error::missing_field("model"))?,
+                            max_tokens: max_tokens.unwrap_or_else(|| 1024),
+                            temperature: temperature.unwrap_or_else(|| 0.63),
+                            stop_sequences: stop_sequences.unwrap_or_else(|| vec![]),
+                            system,
+                            client,
+                        })
+                    }
+
+                    #[cfg(not(feature = "aws-bedrock"))]
+                    Err(de::Error::missing_field("api_key"))
+                }
+            }
+        }
+
+        deserializer.deserialize_enum("AnthropicModel", &["Anthropic", "Bedrock"], AnthropicModelVisitor)
     }
 }
 
@@ -203,60 +388,71 @@ impl AnthropicModel {
             temperature: 0.63,
             stop_sequences: vec![],
             system: None,
+            client: Client::new(),
         }
     }
 
-    pub fn bedrock(aws_access_key: impl Into<String>, aws_secret_key: impl Into<String>, aws_region: impl Into<String>, api_version: impl Into<String>, model: impl Into<String>) -> Self {
+    #[cfg(feature = "aws-bedrock")]
+    pub async fn bedrock(api_version: impl Into<String>, model: impl Into<String>, aws_access_key: Option<String>, aws_secret_key: Option<String>, aws_region: Option<String>) -> Self {
+        let client = super::bedrock::bedrock_client(aws_access_key.clone(), aws_secret_key.clone(), aws_region.clone()).await;
+
         Self::Bedrock {
-            aws_access_key: aws_access_key.into(),
-            aws_secret_key: aws_secret_key.into(),
-            aws_region: aws_region.into(),
+            aws_access_key,
+            aws_secret_key,
+            aws_region,
+
             api_version: api_version.into(),
             model: model.into(),
             max_tokens: 1024,
             temperature: 0.63,
             stop_sequences: vec![],
             system: None,
+            client,
         }
     }
 
-    #[instrument(name = "AnthropicModel:max_tokens", level = "trace", skip(self))]
+    #[instrument(name = "AnthropicModel::max_tokens", level = "trace", skip(self))]
     pub fn max_tokens(self, max_tokens: usize) -> Self {
         match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens: _, temperature, stop_sequences, system } => Self::Anthropic { api_key, api_version, model, max_tokens: max_tokens, temperature, stop_sequences, system },
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens: _, temperature, stop_sequences, system } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens: max_tokens, temperature, stop_sequences, system },
+            Self::Anthropic { api_key, api_version, model, max_tokens: _, temperature, stop_sequences, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system, client },
+            
+            #[cfg(feature = "aws-bedrock")]
+            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens: _, temperature, stop_sequences, system, client } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system, client },
         }
     }
 
-    #[instrument(name = "AnthropicModel:temperature", level = "trace", skip(self))]
+    #[instrument(name = "AnthropicModel::temperature", level = "trace", skip(self))]
     pub fn temperature(self, temperature: f32) -> Self {
         match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens, temperature: _, stop_sequences, system } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature: temperature, stop_sequences, system },
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature: _, stop_sequences, system } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature: temperature, stop_sequences, system },
+            Self::Anthropic { api_key, api_version, model, max_tokens, temperature: _, stop_sequences, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system, client },
+            
+            #[cfg(feature = "aws-bedrock")]
+            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature: _, stop_sequences, system, client } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system, client },
         }
     }
 
-    #[instrument(name = "AnthropicModel:stop_sequences", level = "trace", skip(self))]
+    #[instrument(name = "AnthropicModel::stop_sequences", level = "trace", skip(self))]
     pub fn stop_sequences(self, stop_sequences: Vec<&str>) -> Self {
-        let sequences = stop_sequences.iter().map(|sequence| sequence.to_string()).collect::<Vec<String>>();
         match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences: _, system } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences: sequences, system },
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences: _, system } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences: sequences, system },
+            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences: _, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences: stop_sequences.iter().map(|sequence| sequence.to_string()).collect::<Vec<String>>(), system, client },
+            
+            #[cfg(feature = "aws-bedrock")]
+            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences: _, system, client } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences: stop_sequences.iter().map(|sequence| sequence.to_string()).collect::<Vec<String>>(), system, client },
         }
     }
 
-    #[instrument(name = "AnthropicModel:system", level = "trace", skip(self))]
+    #[instrument(name = "AnthropicModel::system", level = "trace", skip(self))]
     pub fn system(self, system: &str) -> Self {
         match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system: _ } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.into()) },
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system: _ } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.into()) },
+            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system: _, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.to_string()), client },
+            
+            #[cfg(feature = "aws-bedrock")]
+            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system: _, client } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.to_string()), client },
         }
     }
 
-    #[instrument(name = "AnthropicModel:create", level = "trace", skip(self))]
+    #[instrument(name = "AnthropicModel::create", level = "trace", skip(self))]
     pub async fn create(&self, messages: Vec<AnthropicContent>, conversation: Option<Vec<AnthropicMessage>>) -> Result<AnthropicMessageResponse, AnthropicErrorResponse> {
-        let client = Client::new();
-
         let mut request_messages: Vec<AnthropicMessage> = vec![];
         if let Some(mut conversation) = conversation {
             request_messages.append(&mut conversation);
@@ -267,74 +463,89 @@ impl AnthropicModel {
             _ => request_messages.push(AnthropicMessage { role: "user".into(), content: AnthropicMessageContent::Multiple(messages.clone()) }),
         };
 
-        let response = match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system } => {
+        match self {
+            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system, client } => {
                 let request = AnthropicRequest {
-                    api_version: None,
+                    anthropic_version: None,
                     model: Some(model.clone()),
                     max_tokens: max_tokens.clone(),
                     stop_sequences: stop_sequences.clone(),
                     system: system.clone(),
                     temperature: temperature.clone(),
-
+    
                     messages: request_messages,
                 };
-                
-                client.post("https://api.anthropic.com/v1/messages")
+
+                let response = client
+                    .post("https://api.anthropic.com/v1/messages")
                     .header("x-api-key", api_key)
                     .header("anthropic-version", api_version)
+                    .header("Accept", "application/json")
                     .header("Content-Type", "application/json")
                     .json(&request)
                     .send()
-                    .await
+                    .await;
+
+                match response {
+                    Ok(response) => match response.status() {
+                        StatusCode::OK => match response.json::<AnthropicResponse>().await {
+                            Ok(response) => match response {
+                                AnthropicResponse::Error { error } => Err(error),
+                                AnthropicResponse::Message(message) => Ok(message)
+                            },
+                            Err(err) => Err(AnthropicErrorResponse { error_type: "invalid_response_error".into(), message: format!("{}", err) })
+                        },
+                        status_code if status_code.is_client_error() || status_code.is_server_error() => match response.json::<AnthropicResponse>().await {
+                            Ok(response) => match response {
+                                AnthropicResponse::Error { error } => Err(error),
+                                AnthropicResponse::Message(message) => Err(AnthropicErrorResponse { error_type: "invalid_response_error".into(), message: format!("{:?}", message) })
+                            },
+                            Err(err) => Err(AnthropicErrorResponse { error_type: "invalid_response_error".into(), message: format!("{}", err) })
+                        },
+                        status_code => Err(AnthropicErrorResponse { error_type: "invalid_status_error".into(), message: format!("{}", status_code) })
+                    },
+                    Err(err) => Err(AnthropicErrorResponse { error_type: "request_error".into(), message: format!("{}", err) })
+                }
             },
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system } => {
+
+            #[cfg(feature = "aws-bedrock")]
+            Self::Bedrock { aws_access_key: _, aws_secret_key: _, aws_region: _, api_version, model, max_tokens, temperature, stop_sequences, system, client } => {
                 let request = AnthropicRequest {
-                    api_version: Some(api_version.clone()),
+                    anthropic_version: Some(api_version.clone()),
                     model: None,
                     max_tokens: max_tokens.clone(),
                     stop_sequences: stop_sequences.clone(),
                     system: system.clone(),
                     temperature: temperature.clone(),
-
+        
                     messages: request_messages,
                 };
 
-                client.post("https://api.anthropic.com/v1/messages")
-                    .header("Content-Type", "application/json")
-                    .json(&request)
+                let response = client.invoke_model()
+                    .accept("application/json")
+                    .content_type("application/json")
+                    .model_id(model)
+                    .body(aws_sdk_bedrockruntime::primitives::Blob::new(serde_json::to_vec(&request).map_err(|err| AnthropicErrorResponse { error_type: "request_error".into(), message: format!("{}", err) })?))
                     .send()
-                    .await
-            },
-        };
-        match response {
-            Ok(response) => match response.status() {
-                StatusCode::OK => match response.json::<AnthropicResponse>().await {
-                    Ok(response) => match response {
-                        AnthropicResponse::Error { error } => Err(error),
-                        AnthropicResponse::Message(message) => Ok(message)
+                    .await;
+
+                match response {
+                    Ok(response) => match serde_json::from_slice::<AnthropicResponse>(&response.body().clone().into_inner()) {
+                        Ok(response) => match response {
+                            AnthropicResponse::Error { error } => Err(error),
+                            AnthropicResponse::Message(message) => Ok(message)
+                        },
+                        Err(err) => Err(AnthropicErrorResponse { error_type: "invalid_response_error".into(), message: format!("{}", err) })
                     },
-                    Err(err) => Err(AnthropicErrorResponse { error_type: "invalid_response_error".into(), message: format!("{}", err) })
-                },
-                status_code if status_code.is_client_error() => match response.json::<AnthropicResponse>().await {
-                    Ok(response) => match response {
-                        AnthropicResponse::Error { error } => Err(error),
-                        AnthropicResponse::Message(message) => Err(AnthropicErrorResponse { error_type: "invalid_response_error".into(), message: format!("{:?}", message) })
-                    },
-                    Err(err) => Err(AnthropicErrorResponse { error_type: "invalid_response_error".into(), message: format!("{}", err) })
-                },
-                status_code => Err(AnthropicErrorResponse { error_type: "invalid_status_error".into(), message: format!("{}", status_code) })
+                    Err(err) => Err(AnthropicErrorResponse { error_type: "bedrock_sdk_error".into(), message: format!("{}", err) })
+                }
             },
-            Err(err) => {
-                error! { ?err };
-                panic!()
-            }
         }
     }
 }
 
 impl LanguageModel for AnthropicModel {
-    #[instrument(name = "AnthropicModel:inference", level = "trace", skip(self))]
+    #[instrument(name = "AnthropicModel::inference", level = "trace", skip(self))]
     async fn inference(&self, prompt: &str, image: Option<Image>) -> Result<Message> {
         let mut messages = vec![];
         if let Some(image) = image {

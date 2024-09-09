@@ -9,6 +9,10 @@ pub trait LanguageModel {
 }
 
 pub mod anthropic;
+
+#[cfg(feature = "aws-bedrock")]
+mod bedrock;
+
 pub mod cohere;
 pub mod meta;
 pub mod mistral;
