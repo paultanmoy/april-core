@@ -1,7 +1,7 @@
 use std::fmt;
 
 use base64::prelude::{BASE64_STANDARD, Engine as _};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Image {
@@ -12,7 +12,7 @@ pub struct Image {
 impl fmt::Display for Image {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!("data:{};base64, {}", self.media_type(), BASE64_STANDARD.encode(self.data())))
+        write!(f, "data:{};base64, {}", self.media_type(), BASE64_STANDARD.encode(self.data()))
     }
 }
 
@@ -47,7 +47,7 @@ impl fmt::Display for Message {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Message::Image(image) => f.write_fmt(format_args!("{}", image)),
+            Message::Image(image) => write!(f, "{}", image),
             Message::Text { text } => f.write_str(text.as_str()),
         }
     }
@@ -57,3 +57,9 @@ mod assistant;
 pub use assistant::{Assistant, AssistantResponse};
 
 pub mod model;
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum LanguageModel {
+    Anthropic(model::anthropic::AnthropicModel),
+}
