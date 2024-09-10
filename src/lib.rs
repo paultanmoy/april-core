@@ -58,7 +58,7 @@ pub use assistant::{Assistant, AssistantResponse};
 
 pub mod model;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum LanguageModel {
     Anthropic(model::anthropic::AnthropicModel),
