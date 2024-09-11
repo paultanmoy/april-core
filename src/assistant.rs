@@ -1,7 +1,7 @@
-use anyhow::Result;
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
+use tokio::sync::broadcast;
 
 use super::Message;
 
@@ -13,6 +13,9 @@ pub enum AssistantResponse {
 }
 
 #[async_trait]
+#[typetag::serde(tag = "type")]
 pub trait Assistant: Send + Sync {
-    async fn solve(&self, query: &str, context: Option<Value>) -> Result<AssistantResponse>;
+    fn communicate(&mut self, #[allow(unused)] bx: broadcast::Sender<(String, Message)>) {}
+
+    async fn solve(&self, query: &str, context: Option<Value>, session_id: &str) -> AssistantResponse;
 }

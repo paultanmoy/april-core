@@ -1,4 +1,4 @@
-use aws_config::Region;
+use aws_config::{profile::ProfileFileCredentialsProvider, Region};
 use aws_credential_types::{
     provider::future,
     Credentials,
@@ -7,6 +7,7 @@ use aws_sdk_bedrockruntime::{
     config::{ProvideCredentials, SharedCredentialsProvider},
     Client,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 struct CredentialParams {
@@ -23,23 +24,65 @@ impl ProvideCredentials for CredentialParams {
     }
 }
 
-pub async fn bedrock_client(aws_access_key: Option<String>, aws_secret_key: Option<String>, aws_region: Option<String>) -> Client {
-    let mut sdk_config = aws_config::load_from_env().await;
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum AwsConfig {
+    Profile {
+        profile_name: String,
 
-    if let (Some(access_key), Some(secret_key)) = (&aws_access_key, &aws_secret_key) {
-        sdk_config = sdk_config.into_builder()
-            .credentials_provider(SharedCredentialsProvider::new(CredentialParams {
-                access_key: access_key.clone(),
-                secret_key: secret_key.clone(),
-            }))
-            .build();
+        #[serde(skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
+    },
+    Credential {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        access_key: Option<String>,
+        
+        #[serde(skip_serializing_if = "Option::is_none")]
+        secret_key: Option<String>,
+        
+        #[serde(skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
     }
+}
 
-    if let Some(region) = &aws_region {
-        sdk_config = sdk_config.into_builder()
-            .region(Region::new(region.clone()))
-            .build();
-    }
+pub async fn bedrock_client(aws_config: &Option<AwsConfig>) -> Client {
+    let sdk_config = if let Some(aws_config) = aws_config {
+        match aws_config {
+            AwsConfig::Credential { access_key, secret_key, region } => {
+                if (access_key.is_some() && secret_key.is_some()) || region.is_some() {
+                    let mut builder = aws_config::load_from_env().await.into_builder();
+
+                    if let (Some(access_key), Some(secret_key)) = (access_key, secret_key) {
+                        builder = builder.credentials_provider(SharedCredentialsProvider::new(CredentialParams {
+                            access_key: access_key.clone(),
+                            secret_key: secret_key.clone(),
+                        }));
+                    }
+
+                    if let Some(region) = region {
+                        builder = builder.region(Region::new(region.clone()));
+                    }
+
+                    builder.build()
+                } else {
+                    aws_config::load_from_env().await
+                }
+            },
+            AwsConfig::Profile { profile_name, region } => {
+                let mut builder = aws_config::load_from_env().await.into_builder();
+
+                builder = builder.credentials_provider(SharedCredentialsProvider::new(ProfileFileCredentialsProvider::builder().profile_name(profile_name).build()));
+
+                if let Some(region) = region {
+                    builder = builder.region(Region::new(region.clone()));
+                }
+
+                builder.build()
+            },
+        }
+    } else {
+        aws_config::load_from_env().await
+    };
 
     Client::new(&sdk_config)
 }

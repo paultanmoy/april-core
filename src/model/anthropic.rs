@@ -198,13 +198,7 @@ pub enum AnthropicModel {
     #[cfg(feature = "aws-bedrock")]
     Bedrock {
         #[serde(skip_serializing_if = "Option::is_none")]
-        aws_access_key: Option<String>,
-        
-        #[serde(skip_serializing_if = "Option::is_none")]
-        aws_secret_key: Option<String>,
-        
-        #[serde(skip_serializing_if = "Option::is_none")]
-        aws_region: Option<String>,
+        aws_config: Option<super::bedrock::AwsConfig>,
 
         api_version: String,
         model: String,
@@ -229,7 +223,7 @@ impl<'de> Deserialize<'de> for AnthropicModel {
         
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "snake_case")]
-        enum Field { ApiKey, AwsAccessKey, AwsSecretKey, AwsRegion, ApiVersion, Model, MaxTokens, Temperature, StopSequences, System }
+        enum Field { ApiKey, AwsConfig, ApiVersion, Model, MaxTokens, Temperature, StopSequences, System }
 
         struct AnthropicModelVisitor;
 
@@ -253,49 +247,27 @@ impl<'de> Deserialize<'de> for AnthropicModel {
 
                 let mut api_key = None;
 
-                let mut aws_access_key = None;
-                let mut aws_secret_key = None;
-                let mut aws_region = None;
+                let mut aws_config = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
                         Field::ApiKey => {
-                            if aws_access_key.is_some() || aws_secret_key.is_some() || aws_region.is_some() {
-                                return Err(de::Error::custom("either `api_key` or any of `aws_access_key`, `aws_secret_key`, `aws_region` should be present"));
+                            if aws_config.is_some() {
+                                return Err(de::Error::custom("both `api_key` and `aws_config` should not be present"));
                             } else if api_key.is_some() {
                                 return Err(de::Error::duplicate_field("api_key"));
                             }
                             api_key = Some(map.next_value()?);
                         },
-                        Field::AwsAccessKey => {
+                        Field::AwsConfig => {
                             if !cfg!(feature = "aws-bedrock") {
-                                return Err(de::Error::unknown_field("aws_access_key", FIELDS));
+                                return Err(de::Error::unknown_field("aws_config", FIELDS));
                             } else if api_key.is_some() {
-                                return Err(de::Error::custom("either `api_key` or any of `aws_access_key`, `aws_secret_key`, `aws_region` should be present"));
-                            } else if aws_access_key.is_some() {
-                                return Err(de::Error::duplicate_field("aws_access_key"));
+                                return Err(de::Error::custom("both `api_key` and `aws_config` should not be present"));
+                            } else if aws_config.is_some() {
+                                return Err(de::Error::duplicate_field("aws_config"));
                             }
-                            aws_access_key = Some(map.next_value()?);
-                        },
-                        Field::AwsSecretKey => {
-                            if !cfg!(feature = "aws-bedrock") {
-                                return Err(de::Error::unknown_field("aws_secret_key", FIELDS));
-                            } else if api_key.is_some() {
-                                return Err(de::Error::custom("either `api_key` or any of `aws_access_key`, `aws_secret_key`, `aws_region` should be present"));
-                            } else if aws_secret_key.is_some() {
-                                return Err(de::Error::duplicate_field("aws_secret_key"));
-                            }
-                            aws_secret_key = Some(map.next_value()?);
-                        },
-                        Field::AwsRegion => {
-                            if !cfg!(feature = "aws-bedrock") {
-                                return Err(de::Error::unknown_field("aws_region", FIELDS));
-                            } else if api_key.is_some() {
-                                return Err(de::Error::custom("either `api_key` or any of `aws_access_key`, `aws_secret_key`, `aws_region` should be present"));
-                            } else if aws_region.is_some() {
-                                return Err(de::Error::duplicate_field("aws_region"));
-                            }
-                            aws_region = Some(map.next_value()?);
+                            aws_config = Some(map.next_value()?);
                         },
                         Field::ApiVersion => {
                             if api_version.is_some() {
@@ -352,12 +324,10 @@ impl<'de> Deserialize<'de> for AnthropicModel {
                     {
                         let client = tokio::runtime::Runtime::new()
                             .map_err(|err| de::Error::custom(format!("{}", err)))?
-                            .block_on(super::bedrock::bedrock_client(aws_access_key.clone(), aws_secret_key.clone(), aws_region.clone()));
+                            .block_on(super::bedrock::bedrock_client(&aws_config));
 
                         Ok(AnthropicModel::Bedrock {
-                            aws_access_key,
-                            aws_secret_key,
-                            aws_region,
+                            aws_config,
                             api_version: api_version.ok_or_else(|| de::Error::missing_field("api_version"))?,
                             model: model.ok_or_else(|| de::Error::missing_field("model"))?,
                             max_tokens: max_tokens.unwrap_or_else(|| 1024),
@@ -393,13 +363,11 @@ impl AnthropicModel {
     }
 
     #[cfg(feature = "aws-bedrock")]
-    pub async fn bedrock(api_version: impl Into<String>, model: impl Into<String>, aws_access_key: Option<String>, aws_secret_key: Option<String>, aws_region: Option<String>) -> Self {
-        let client = super::bedrock::bedrock_client(aws_access_key.clone(), aws_secret_key.clone(), aws_region.clone()).await;
+    pub async fn bedrock(api_version: impl Into<String>, model: impl Into<String>, aws_config: Option<super::bedrock::AwsConfig>) -> Self {
+        let client = super::bedrock::bedrock_client(&aws_config).await;
 
         Self::Bedrock {
-            aws_access_key,
-            aws_secret_key,
-            aws_region,
+            aws_config,
 
             api_version: api_version.into(),
             model: model.into(),
@@ -417,7 +385,7 @@ impl AnthropicModel {
             Self::Anthropic { api_key, api_version, model, max_tokens: _, temperature, stop_sequences, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system, client },
             
             #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens: _, temperature, stop_sequences, system, client } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system, client },
+            Self::Bedrock { aws_config, api_version, model, max_tokens: _, temperature, stop_sequences, system, client } => Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences, system, client },
         }
     }
 
@@ -427,7 +395,7 @@ impl AnthropicModel {
             Self::Anthropic { api_key, api_version, model, max_tokens, temperature: _, stop_sequences, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system, client },
             
             #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature: _, stop_sequences, system, client } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system, client },
+            Self::Bedrock { aws_config, api_version, model, max_tokens, temperature: _, stop_sequences, system, client } => Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences, system, client },
         }
     }
 
@@ -437,7 +405,7 @@ impl AnthropicModel {
             Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences: _, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences: stop_sequences.iter().map(|sequence| sequence.to_string()).collect::<Vec<String>>(), system, client },
             
             #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences: _, system, client } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences: stop_sequences.iter().map(|sequence| sequence.to_string()).collect::<Vec<String>>(), system, client },
+            Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences: _, system, client } => Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences: stop_sequences.iter().map(|sequence| sequence.to_string()).collect::<Vec<String>>(), system, client },
         }
     }
 
@@ -447,7 +415,7 @@ impl AnthropicModel {
             Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system: _, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.to_string()), client },
             
             #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system: _, client } => Self::Bedrock { aws_access_key, aws_secret_key, aws_region, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.to_string()), client },
+            Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences, system: _, client } => Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.to_string()), client },
         }
     }
 
@@ -509,7 +477,7 @@ impl AnthropicModel {
             },
 
             #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_access_key: _, aws_secret_key: _, aws_region: _, api_version, model, max_tokens, temperature, stop_sequences, system, client } => {
+            Self::Bedrock { aws_config: _, api_version, model, max_tokens, temperature, stop_sequences, system, client } => {
                 let request = AnthropicRequest {
                     anthropic_version: Some(api_version.clone()),
                     model: None,
