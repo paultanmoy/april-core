@@ -56,10 +56,32 @@ impl fmt::Display for Message {
 mod assistant;
 pub use assistant::{Assistant, AssistantResponse};
 
+mod error;
+pub use error::Error;
+
 pub mod model;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum LanguageModel {
     Anthropic(model::anthropic::AnthropicModel),
+}
+
+impl model::LanguageModel for LanguageModel {
+    async fn inference(&self, prompt: &str, image: Option<Image>) -> Result<Message, Error> {
+        match self {
+            Self::Anthropic(model) => model,
+        }.inference(prompt, image).await
+    }
+}
+
+impl LanguageModel {
+    pub fn anthropic(api_key: impl Into<String>, api_version: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::Anthropic(model::anthropic::AnthropicModel::new(api_key, api_version, model))
+    }
+
+    #[cfg(feature = "aws-bedrock")]
+    pub async fn anthropic_bedrock(api_version: impl Into<String>, model: impl Into<String>, aws_config: Option<model::AwsConfig>) -> Self {
+        Self::Anthropic(model::anthropic::AnthropicModel::bedrock(api_version, model, aws_config).await)
+    }
 }

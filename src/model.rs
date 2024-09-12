@@ -1,8 +1,6 @@
 use std::future::Future;
 
-use anyhow::Error;
-
-use super::{Image, Message};
+use super::{Error, Image, Message};
 
 pub trait LanguageModel {
     fn inference(&self, prompt: &str, image: Option<Image>) -> impl Future<Output = Result<Message, Error>>;
@@ -12,6 +10,9 @@ pub mod anthropic;
 
 #[cfg(feature = "aws-bedrock")]
 mod bedrock;
+
+#[cfg(feature = "aws-bedrock")]
+pub use bedrock::AwsConfig;
 
 pub mod cohere;
 pub mod meta;

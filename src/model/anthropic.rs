@@ -1,6 +1,6 @@
 use std::fmt;
 
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use base64::prelude::{BASE64_STANDARD, Engine as _};
 use reqwest::{Client, StatusCode};
 use serde::{
@@ -11,7 +11,7 @@ use serde::{
 };
 use tracing::{debug, error, info, instrument, warn};
 
-use super::{Image, LanguageModel, Message};
+use super::{Error, Image, LanguageModel, Message};
 
 #[derive(Debug, Deserialize)]
 pub struct AnthropicErrorResponse {
@@ -186,6 +186,8 @@ pub enum AnthropicModel {
         model: String,
         max_tokens: usize,
         temperature: f32,
+        
+        #[serde(skip_serializing_if = "Vec::is_empty")]
         stop_sequences: Vec<String>,
         
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,6 +206,8 @@ pub enum AnthropicModel {
         model: String,
         max_tokens: usize,
         temperature: f32,
+        
+        #[serde(skip_serializing_if = "Vec::is_empty")]
         stop_sequences: Vec<String>,
         
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -514,7 +518,7 @@ impl AnthropicModel {
 
 impl LanguageModel for AnthropicModel {
     #[instrument(name = "AnthropicModel::inference", level = "trace", skip(self))]
-    async fn inference(&self, prompt: &str, image: Option<Image>) -> Result<Message> {
+    async fn inference(&self, prompt: &str, image: Option<Image>) -> Result<Message, Error> {
         let mut messages = vec![];
         if let Some(image) = image {
             messages.push(AnthropicContent::Image { source: image.into() });
@@ -538,11 +542,11 @@ impl LanguageModel for AnthropicModel {
         }) {
             Ok(message) => match message {
                 Some(message) => Ok(message),
-                None => Err(anyhow!("no-content"))
+                None => Err(Error::Unexpected(anyhow!("no-content")))
             },
             Err(err) => {
                 error! { ?err };
-                Err(anyhow!(err.message))
+                Err(Error::ModelResponse(err.message))
             }
         }
     }
