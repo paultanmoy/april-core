@@ -14,7 +14,7 @@ pub enum AssistantResponse {
 
 #[async_trait]
 #[typetag::serde(tag = "type")]
-pub trait Assistant: Send + Sync {
+pub trait Assistant: std::fmt::Debug + Send + Sync {
     fn communicate(&mut self, #[allow(unused)] bx: broadcast::Sender<(String, Message)>) {}
 
     async fn solve(&self, query: &str, context: Option<Value>, session_id: &str) -> AssistantResponse;

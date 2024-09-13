@@ -61,7 +61,7 @@ pub use error::Error;
 
 pub mod model;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum LanguageModel {
     Anthropic(model::anthropic::AnthropicModel),

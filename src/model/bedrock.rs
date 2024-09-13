@@ -24,7 +24,7 @@ impl ProvideCredentials for CredentialParams {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum AwsConfig {
     Profile {

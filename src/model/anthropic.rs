@@ -177,7 +177,7 @@ struct AnthropicRequest {
     temperature: f32,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 pub enum AnthropicModel {
     Anthropic {
