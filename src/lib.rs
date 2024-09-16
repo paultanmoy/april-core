@@ -53,6 +53,24 @@ impl fmt::Display for Message {
     }
 }
 
+impl From<Image> for Message {
+    fn from(value: Image) -> Self {
+        Self::Image(value)
+    }
+}
+
+impl From<String> for Message {
+    fn from(value: String) -> Self {
+        Self::Text { text: value }
+    }
+}
+
+impl From<&str> for Message {
+    fn from(value: &str) -> Self {
+        value.to_string().into()
+    }
+}
+
 mod assistant;
 pub use assistant::{Assistant, AssistantResponse};
 
@@ -68,10 +86,10 @@ pub enum LanguageModel {
 }
 
 impl model::LanguageModel for LanguageModel {
-    async fn inference(&self, prompt: &str, image: Option<Image>) -> Result<Message, Error> {
+    async fn inference(&self, prompt: model::LanguageModelPrompt) -> Result<Message, Error> {
         match self {
             Self::Anthropic(model) => model,
-        }.inference(prompt, image).await
+        }.inference(prompt).await
     }
 }
 

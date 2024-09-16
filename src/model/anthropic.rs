@@ -11,7 +11,7 @@ use serde::{
 };
 use tracing::{debug, error, info, instrument, warn};
 
-use super::{Error, Image, LanguageModel, Message};
+use super::{Error, Image, LanguageModel, LanguageModelPrompt, Message};
 
 #[derive(Debug, Deserialize)]
 pub struct AnthropicErrorResponse {
@@ -184,15 +184,7 @@ pub enum AnthropicModel {
         api_key: String,
         api_version: String,
         model: String,
-        max_tokens: usize,
-        temperature: f32,
         
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        stop_sequences: Vec<String>,
-        
-        #[serde(skip_serializing_if = "Option::is_none")]
-        system: Option<String>,
-
         #[serde(skip)]
         client: Client,
     },
@@ -204,15 +196,7 @@ pub enum AnthropicModel {
 
         api_version: String,
         model: String,
-        max_tokens: usize,
-        temperature: f32,
         
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        stop_sequences: Vec<String>,
-        
-        #[serde(skip_serializing_if = "Option::is_none")]
-        system: Option<String>,
-
         #[serde(skip_serializing)]
         client: aws_sdk_bedrockruntime::Client,
     },
@@ -223,11 +207,11 @@ impl<'de> Deserialize<'de> for AnthropicModel {
     where
         D: Deserializer<'de>,
     {
-        const FIELDS: &[&str] = &["api_key", "api_version", "model", "max_tokens", "temperature", "stop_sequences", "system"];
+        const FIELDS: &[&str] = &["api_key", "api_version", "model"];
         
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "snake_case")]
-        enum Field { ApiKey, AwsConfig, ApiVersion, Model, MaxTokens, Temperature, StopSequences, System }
+        enum Field { ApiKey, AwsConfig, ApiVersion, Model }
 
         struct AnthropicModelVisitor;
 
@@ -244,10 +228,6 @@ impl<'de> Deserialize<'de> for AnthropicModel {
             {
                 let mut api_version = None;
                 let mut model = None;
-                let mut max_tokens = None;
-                let mut temperature = None;
-                let mut stop_sequences = None;
-                let mut system = None;
 
                 let mut api_key = None;
 
@@ -284,30 +264,6 @@ impl<'de> Deserialize<'de> for AnthropicModel {
                                 return Err(de::Error::duplicate_field("model"));
                             }
                             model = Some(map.next_value()?);
-                        },
-                        Field::MaxTokens => {
-                            if max_tokens.is_some() {
-                                return Err(de::Error::duplicate_field("max_tokens"));
-                            }
-                            max_tokens = Some(map.next_value()?);
-                        },
-                        Field::Temperature => {
-                            if temperature.is_some() {
-                                return Err(de::Error::duplicate_field("temperature"));
-                            }
-                            temperature = Some(map.next_value()?);
-                        },
-                        Field::StopSequences => {
-                            if stop_sequences.is_some() {
-                                return Err(de::Error::duplicate_field("stop_sequences"));
-                            }
-                            stop_sequences = Some(map.next_value()?);
-                        },
-                        Field::System => {
-                            if system.is_some() {
-                                return Err(de::Error::duplicate_field("system"));
-                            }
-                            system = Some(map.next_value()?);
                         }
                     }
                 }
@@ -317,10 +273,6 @@ impl<'de> Deserialize<'de> for AnthropicModel {
                         api_key,
                         api_version: api_version.ok_or_else(|| de::Error::missing_field("api_version"))?,
                         model: model.ok_or_else(|| de::Error::missing_field("model"))?,
-                        max_tokens: max_tokens.unwrap_or_else(|| 1024),
-                        temperature: temperature.unwrap_or_else(|| 0.63),
-                        stop_sequences: stop_sequences.unwrap_or_else(|| vec![]),
-                        system,
                         client: Client::new(),
                     })
                 } else {
@@ -334,10 +286,6 @@ impl<'de> Deserialize<'de> for AnthropicModel {
                             aws_config,
                             api_version: api_version.ok_or_else(|| de::Error::missing_field("api_version"))?,
                             model: model.ok_or_else(|| de::Error::missing_field("model"))?,
-                            max_tokens: max_tokens.unwrap_or_else(|| 1024),
-                            temperature: temperature.unwrap_or_else(|| 0.63),
-                            stop_sequences: stop_sequences.unwrap_or_else(|| vec![]),
-                            system,
                             client,
                         })
                     }
@@ -358,10 +306,6 @@ impl AnthropicModel {
             api_key: api_key.into(),
             api_version: api_version.into(),
             model: model.into(),
-            max_tokens: 1024,
-            temperature: 0.63,
-            stop_sequences: vec![],
-            system: None,
             client: Client::new(),
         }
     }
@@ -375,56 +319,12 @@ impl AnthropicModel {
 
             api_version: api_version.into(),
             model: model.into(),
-            max_tokens: 1024,
-            temperature: 0.63,
-            stop_sequences: vec![],
-            system: None,
             client,
         }
     }
 
-    #[instrument(name = "AnthropicModel::max_tokens", level = "trace", skip(self))]
-    pub fn max_tokens(self, max_tokens: usize) -> Self {
-        match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens: _, temperature, stop_sequences, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system, client },
-            
-            #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_config, api_version, model, max_tokens: _, temperature, stop_sequences, system, client } => Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences, system, client },
-        }
-    }
-
-    #[instrument(name = "AnthropicModel::temperature", level = "trace", skip(self))]
-    pub fn temperature(self, temperature: f32) -> Self {
-        match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens, temperature: _, stop_sequences, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system, client },
-            
-            #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_config, api_version, model, max_tokens, temperature: _, stop_sequences, system, client } => Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences, system, client },
-        }
-    }
-
-    #[instrument(name = "AnthropicModel::stop_sequences", level = "trace", skip(self))]
-    pub fn stop_sequences(self, stop_sequences: Vec<&str>) -> Self {
-        match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences: _, system, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences: stop_sequences.iter().map(|sequence| sequence.to_string()).collect::<Vec<String>>(), system, client },
-            
-            #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences: _, system, client } => Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences: stop_sequences.iter().map(|sequence| sequence.to_string()).collect::<Vec<String>>(), system, client },
-        }
-    }
-
-    #[instrument(name = "AnthropicModel::system", level = "trace", skip(self))]
-    pub fn system(self, system: &str) -> Self {
-        match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system: _, client } => Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.to_string()), client },
-            
-            #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences, system: _, client } => Self::Bedrock { aws_config, api_version, model, max_tokens, temperature, stop_sequences, system: Some(system.to_string()), client },
-        }
-    }
-
     #[instrument(name = "AnthropicModel::create", level = "trace", skip(self))]
-    pub async fn create(&self, messages: Vec<AnthropicContent>, conversation: Option<Vec<AnthropicMessage>>) -> Result<AnthropicMessageResponse, AnthropicErrorResponse> {
+    pub async fn create(&self, messages: Vec<AnthropicContent>, max_tokens: usize, stop_sequences: Vec<String>, system: Option<String>, temperature: f32, conversation: Option<Vec<AnthropicMessage>>) -> Result<AnthropicMessageResponse, AnthropicErrorResponse> {
         let mut request_messages: Vec<AnthropicMessage> = vec![];
         if let Some(mut conversation) = conversation {
             request_messages.append(&mut conversation);
@@ -436,14 +336,14 @@ impl AnthropicModel {
         };
 
         match self {
-            Self::Anthropic { api_key, api_version, model, max_tokens, temperature, stop_sequences, system, client } => {
+            Self::Anthropic { api_key, api_version, model, client } => {
                 let request = AnthropicRequest {
                     anthropic_version: None,
                     model: Some(model.clone()),
-                    max_tokens: max_tokens.clone(),
-                    stop_sequences: stop_sequences.clone(),
-                    system: system.clone(),
-                    temperature: temperature.clone(),
+                    max_tokens,
+                    stop_sequences,
+                    system,
+                    temperature,
     
                     messages: request_messages,
                 };
@@ -481,14 +381,14 @@ impl AnthropicModel {
             },
 
             #[cfg(feature = "aws-bedrock")]
-            Self::Bedrock { aws_config: _, api_version, model, max_tokens, temperature, stop_sequences, system, client } => {
+            Self::Bedrock { aws_config: _, api_version, model, client } => {
                 let request = AnthropicRequest {
                     anthropic_version: Some(api_version.clone()),
                     model: None,
-                    max_tokens: max_tokens.clone(),
-                    stop_sequences: stop_sequences.clone(),
-                    system: system.clone(),
-                    temperature: temperature.clone(),
+                    max_tokens,
+                    stop_sequences,
+                    system,
+                    temperature,
         
                     messages: request_messages,
                 };
@@ -518,14 +418,15 @@ impl AnthropicModel {
 
 impl LanguageModel for AnthropicModel {
     #[instrument(name = "AnthropicModel::inference", level = "trace", skip(self))]
-    async fn inference(&self, prompt: &str, image: Option<Image>) -> Result<Message, Error> {
-        let mut messages = vec![];
-        if let Some(image) = image {
-            messages.push(AnthropicContent::Image { source: image.into() });
-        }
-        messages.push(AnthropicContent::Text { text: prompt.into() });
+    async fn inference(&self, prompt: LanguageModelPrompt) -> Result<Message, Error> {
+        let LanguageModelPrompt { max_tokens, messages, temperature, stop_sequences, system } = prompt;
+        
+        let messages = messages.into_iter().map(|message| match message {
+            Message::Image(image) => AnthropicContent::Image { source: image.into() },
+            Message::Text { text } => AnthropicContent::Text { text },
+        }).collect::<Vec<AnthropicContent>>();
 
-        match self.create(messages, None).await.map(|message| {
+        match self.create(messages, max_tokens, stop_sequences, system, temperature, None).await.map(|message| {
             debug! { response = ?message };
             info! { usage = ?message.usage };
 
