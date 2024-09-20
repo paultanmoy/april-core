@@ -80,7 +80,7 @@ pub use error::Error;
 pub mod model;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "provider")]
 pub enum LanguageModel {
     Anthropic(model::anthropic::AnthropicModel),
 }
